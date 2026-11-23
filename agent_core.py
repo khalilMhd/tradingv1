@@ -8,40 +8,40 @@ from database import save_risk_report
 
 def run_autonomous_risk_agent(ticker: str, period: str = "2y", auto_save: bool = True) -> dict:
     """
-    يشغل الـ Risk Agent الكامل:
-    1. يجري التجارب الرقمية على الاستراتيجيات.
-    2. يجمع أخبار الشركة الحية.
-    3. يمرر المعطيات لعقل Gemini لتقييم المخاطر النوعية والكمية وإصدار القرار النهائي.
-    4. يحفظ التقرير في Supabase.
+    Runs the full Risk Guard Agent:
+    1. Executes quantitative strategy backtests.
+    2. Fetches live company news.
+    3. Passes metrics and news to Gemini to evaluate qualitative/quantitative risk and issue a strict decision.
+    4. Saves the report to Supabase.
     """
-    # الخطوة 1: تشغيل المختبر الرقمي
+    # Step 1: Run the quantitative lab
     lab_results = run_strategy_experiment(ticker, period=period)
     if "error" in lab_results:
         return {"error": lab_results["error"]}
 
-    # الخطوة 2: جلب أخبار الشركة الحية
+    # Step 2: Fetch live company news
     news_list = get_company_news(ticker, limit=5)
 
-    # تجهيز ملخص البيانات للـ LLM (بدون مصفوفة المنحنيات الضخمة)
+    # Prepare data summary for the LLM (excluding large equity curve arrays)
     metrics_for_ai = {k: v for k, v in lab_results.items() if k != "equity_curves"}
     metrics_for_ai["recent_company_news"] = news_list
     metrics_for_ai["strict_guardrails"] = RISK_RULES
 
     if not GEMINI_API_KEY or "your_gemini" in GEMINI_API_KEY:
-        ai_summary = "⚠️ مفتاح GEMINI_API_KEY غير مضاف في ملف .env. تم الاعتماد على التحليل الرقمي الصارم فقط."
+        ai_summary = "⚠️ GEMINI_API_KEY is not configured in Secrets. Relying strictly on quantitative guardrails."
     else:
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
             system_instruction = """
-            أنت مدير مخاطر مالي صارم جداً (Chief Risk Officer) ومحلل كمي.
-            مهمتك تقييم نتائج مختبر الاستراتيجيات وأخبار الشركة الحية لحماية رأس المال.
-            القواعد الصارمة:
-            1. اشرح لماذا فازت الأداة المختارة أو لماذا تم رفض السهم بالكامل بناءً على Sharpe Ratio و Max Drawdown.
-            2. حلل الأخبار المرفقة: هل هناك أي خبر سلبي خطير (تراجع أرباح، تحقيقات، أزمة قطاعية) يستدعي الحذر حتى لو كانت الأرقام جيدة؟
-            3. أكد على خطة الحماية: السعر الحالي، نقطة وقف الخسارة الإجباري (Stop-Loss)، والكمية المسموحة (قاعدة 1%).
-            4. اكتب التقرير باللغة العربية بأسلوب مهني مباشر ومنظم في نقاط واضحة.
+            You are an ultra-strict Chief Risk Officer (CRO) and Quantitative Analyst.
+            Your mission is to evaluate strategy backtest metrics and live company news to protect capital and minimize drawdowns.
+            Strict Rules:
+            1. Explain why the winning strategy succeeded or why the ticker was completely REJECTED based on Sharpe Ratio and Max Drawdown.
+            2. Analyze the attached news headlines: flag any severe negative catalysts (earnings misses, lawsuits, regulatory probes, sector headwinds) that warrant caution even if historical metrics look good.
+            3. Explicitly state the capital protection plan: Current Price, Mandatory ATR Stop-Loss, Take-Profit target, and exact Position Size (1% max portfolio risk rule).
+            4. Write the report in clear, direct, executive-level English using structured bullet points.
             """
-            prompt = f"حلل نتائج التجربة التالية وأصدر تقرير المخاطر النهائي:\n{json.dumps(metrics_for_ai, ensure_ascii=False, indent=2)}"
+            prompt = f"Analyze the following experiment results and issue the final Risk Officer Report:\n{json.dumps(metrics_for_ai, indent=2)}"
             
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
@@ -53,10 +53,10 @@ def run_autonomous_risk_agent(ticker: str, period: str = "2y", auto_save: bool =
             )
             ai_summary = response.text
         except Exception as e:
-            ai_summary = f"حدث خطأ أثناء الاتصال بنموذج Gemini: {str(e)}"
+            ai_summary = f"Error communicating with Gemini API: {str(e)}"
 
-    # الخطوة 3: حفظ التقرير في Supabase
-    save_status = {"saved": False, "message": "لم يتم تفعيل الحفظ التلقائي."}
+    # Step 3: Save report to Supabase
+    save_status = {"saved": False, "message": "Auto-save is disabled."}
     if auto_save:
         save_status = save_risk_report(lab_results, ai_summary)
 
