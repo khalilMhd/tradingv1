@@ -7,7 +7,7 @@ from broker_data import get_stock_history, get_paper_account_balance
 def run_strategy_experiment(ticker: str, period: str = "2y", desired_capital: float = 10000.0) -> dict:
     """
     Tests 8 distinct quantitative trading tools/strategies on the target stock,
-    ranks them by risk-adjusted performance, computes execution confidence (%),
+    ranks them by stability-aware risk-adjusted performance, computes execution confidence (%),
     forecasts profits, and evaluates desired capital against the 1% account risk guardrail.
     """
     df = get_stock_history(ticker, period=period)
@@ -115,7 +115,10 @@ def run_strategy_experiment(ticker: str, period: str = "2y", desired_capital: fl
         active_days = strat_ret[shifted_sig > 0]
         win_rate_pct = ((active_days > 0).sum() / len(active_days) * 100) if len(active_days) > 0 else 50.0
 
-        risk_score = round(float(sharpe - (abs(max_dd) / 100.0)), 3)
+        # Stability-aware Risk Score: rewards Sharpe & Win Rate, penalizes Drawdown & Volatility
+        stability_penalty = (abs(max_dd) / 100.0) + (ann_vol / 250.0)
+        win_bonus = max(0.0, (win_rate_pct - 50.0) / 100.0) * 0.25
+        risk_score = round(float(sharpe - stability_penalty + win_bonus), 3)
 
         passed_rules = (
             max_dd >= RISK_RULES["MAX_ALLOWED_DRAWDOWN_PCT"] and
@@ -155,11 +158,9 @@ def run_strategy_experiment(ticker: str, period: str = "2y", desired_capital: fl
     max_dollar_risk = account_balance * (RISK_RULES["MAX_RISK_PER_TRADE_PCT"] / 100.0)
     recommended_shares = int(max_dollar_risk // stop_loss_distance) if stop_loss_distance > 0 else 0
 
-    # Optimal capital that keeps worst-case stop-loss loss <= 1% of account balance
     sl_fraction = max(stop_loss_pct / 100.0, 1e-6)
     optimal_safe_capital_usd = round(min(account_balance, max_dollar_risk / sl_fraction), 2)
 
-    # Evaluate user's desired capital slider input
     desired_capital_clean = round(float(desired_capital), 2)
     desired_shares_raw = int(desired_capital_clean // current_price) if current_price > 0 else 0
     loss_per_share = max(0.0, current_price - stop_loss_price)
