@@ -4,15 +4,24 @@ from datetime import datetime
 from config import RISK_RULES
 from broker_data import get_stock_history, get_paper_account_balance
 
-def run_strategy_experiment(ticker: str, period: str = "2y", desired_capital: float = 10000.0) -> dict:
+def run_strategy_experiment(
+    ticker: str,
+    period: str = "2y",
+    desired_capital: float = 10000.0,
+    market_type: str = "Stocks & ETFs"
+) -> dict:
     """
-    Tests 8 distinct quantitative trading tools/strategies on the target stock,
+    Tests 8 distinct quantitative trading tools/strategies across Stocks/ETFs, Gold, Oil, or Forex,
     ranks them by stability-aware risk-adjusted performance, computes execution confidence (%),
     forecasts profits, and evaluates desired capital against the 1% account risk guardrail.
     """
     df = get_stock_history(ticker, period=period)
     if df.empty or len(df) < 60:
-        return {"error": f"Insufficient historical data for {ticker}"}
+        return {"error": f"Insufficient historical data for {ticker} ({market_type})"}
+
+    # Flatten MultiIndex columns if yfinance returns them
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
     df["Returns"] = df["Close"].pct_change()
 
@@ -198,10 +207,13 @@ def run_strategy_experiment(ticker: str, period: str = "2y", desired_capital: fl
     expected_annual_return_pct = round(float(top_metric["total_return_pct"] / years_divisor), 2)
     expected_annual_profit_usd = round(float(expected_position_value_usd * (expected_annual_return_pct / 100.0)), 2)
 
+    price_decimals = 4 if "=X" in ticker.upper() or market_type == "Forex" else 2
+
     return {
         "ticker": ticker.upper(),
+        "market_type": market_type,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "current_price": round(current_price, 2),
+        "current_price": round(current_price, price_decimals),
         "current_daily_volatility_pct": round(current_atr_pct, 2),
         "risk_status": risk_status,
         "execution_confidence_pct": execution_confidence_pct,
@@ -229,9 +241,9 @@ def run_strategy_experiment(ticker: str, period: str = "2y", desired_capital: fl
             "account_balance": round(account_balance, 2),
             "max_risk_dollars": round(max_dollar_risk, 2),
             "recommended_shares": recommended_shares,
-            "stop_loss_price": round(stop_loss_price, 2),
+            "stop_loss_price": round(stop_loss_price, price_decimals),
             "stop_loss_pct": round(stop_loss_pct, 2),
-            "take_profit_price": round(take_profit_price, 2)
+            "take_profit_price": round(take_profit_price, price_decimals)
         },
         "strategies_comparison": comparison,
         "equity_curves": equity_curves
