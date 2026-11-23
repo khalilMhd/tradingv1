@@ -9,7 +9,7 @@ from database import fetch_recent_reports
 st.set_page_config(page_title="Risk Guard AI Agent", page_icon="🛡️", layout="wide")
 
 st.title("🛡️ Risk Guard AI Agent — Autonomous Risk & Paper Trading Lab")
-st.caption("Independent quantitative agent for backtesting equity strategies, enforcing strict risk guardrails, and executing protected paper trades.")
+st.caption("Independent quantitative agent for backtesting equity strategies, computing execution confidence & profit forecasts, enforcing strict risk guardrails, and executing protected paper trades.")
 
 # Sidebar: Experiment Settings & Hard Guardrails
 with st.sidebar:
@@ -35,7 +35,7 @@ tab1, tab2 = st.tabs(["🔬 Live Strategy Lab & Execution", "🗄️ Saved Repor
 
 with tab1:
     if run_btn and ticker_input:
-        with st.spinner(f"Running backtests, scanning {ticker_input} news, and enforcing risk guardrails..."):
+        with st.spinner(f"Running backtests, computing execution odds & profit forecast for {ticker_input}, and scanning news..."):
             result = run_autonomous_risk_agent(ticker_input, period=period_input, auto_save=auto_save)
             st.session_state["last_result"] = result
 
@@ -46,7 +46,9 @@ with tab1:
         else:
             lab = res["lab_results"]
             pos = lab["position_sizing"]
+            pf = lab.get("profit_forecast", {})
             status = lab["risk_status"]
+            exec_conf = lab.get("execution_confidence_pct", 0.0)
 
             # Database save notification
             if res["save_status"]["saved"]:
@@ -54,7 +56,7 @@ with tab1:
             else:
                 st.info(f"Storage Notice: {res['save_status']['message']}")
 
-            # Key Metrics Bar
+            # Top Row: Verdict, Execution Chance %, Current Price, Stop-Loss
             col1, col2, col3, col4 = st.columns(4)
             col1.metric(
                 "Agent Verdict",
@@ -62,9 +64,40 @@ with tab1:
                 delta="Safe to Execute" if status == "APPROVED" else "Rejected (High Risk)",
                 delta_color="normal" if status == "APPROVED" else "inverse"
             )
-            col2.metric("Winning Strategy", lab["winning_strategy"].split()[0])
+            col2.metric(
+                "Execution Confidence",
+                f"{exec_conf}%",
+                delta=f"Win Rate: {pf.get('historical_win_rate_pct', 0)}%"
+            )
             col3.metric("Current Price / Volatility", f"${lab['current_price']}", f"ATR: {lab['current_daily_volatility_pct']}%")
             col4.metric("Mandatory Stop-Loss", f"${pos['stop_loss_price']}", f"-{pos['stop_loss_pct']}%", delta_color="inverse")
+
+            st.progress(min(max(exec_conf / 100.0, 0.0), 1.0), text=f"Execution Readiness & Signal Quality Score: {exec_conf}%")
+
+            # Second Row: Expected Profit & Risk Forecast Cards
+            st.subheader("💰 Expected Profit & Trade Forecast")
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric(
+                "Target Profit (Take-Profit)",
+                f"+${pf.get('expected_gross_profit_usd', 0):,.2f}",
+                delta=f"+{pf.get('expected_profit_pct', 0)}% per share"
+            )
+            p2.metric(
+                "Expected Value (EV)",
+                f"${pf.get('expected_value_usd', 0):+,.2f}",
+                delta="Probability-weighted"
+            )
+            p3.metric(
+                "Est. Annualized Return",
+                f"{pf.get('expected_annual_return_pct', 0):+.2f}%",
+                delta=f"~${pf.get('expected_annual_profit_usd', 0):+,.2f} on position"
+            )
+            p4.metric(
+                "Capped Max Loss (1% Rule)",
+                f"-${pf.get('expected_max_loss_usd', pos['max_risk_dollars']):,.2f}",
+                delta=f"{pos['recommended_shares']} shares",
+                delta_color="inverse"
+            )
 
             st.divider()
 
@@ -84,7 +117,7 @@ with tab1:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Strategy Risk Comparison Table (Safe column renaming for 6+ columns)
+            # Strategy Risk Comparison Table
             st.subheader("📊 Quantitative Risk & Return Comparison")
             comp_df = pd.DataFrame(lab["strategies_comparison"]).T
             comp_df = comp_df.rename(columns={
@@ -92,6 +125,7 @@ with tab1:
                 "annual_volatility_pct": "Annual Volatility (%)",
                 "sharpe_ratio": "Sharpe Ratio",
                 "max_drawdown_pct": "Max Drawdown (%)",
+                "win_rate_pct": "Win Rate (%)",
                 "risk_score": "Risk Score",
                 "passed_strict_guardrails": "Passed Guardrails?"
             })
@@ -110,9 +144,9 @@ with tab1:
             with c_exec:
                 st.subheader("⚡ Paper Trading Execution")
                 st.write(f"**Paper Account Balance:** `${pos['account_balance']:,.2f}`")
+                st.write(f"**Estimated Position Size:** `${pf.get('expected_position_value_usd', 0):,.2f}` (`{pos['recommended_shares']}` shares)")
                 st.write(f"**Max Dollar Risk (1% Rule):** `${pos['max_risk_dollars']:,.2f}`")
-                st.write(f"**Calculated Position Size:** `{pos['recommended_shares']}` shares")
-                st.write(f"**Take-Profit Target (1:2):** `${pos['take_profit_price']}`")
+                st.write(f"**Target Profit at TP (`${pos['take_profit_price']}`):** `+${pf.get('expected_gross_profit_usd', 0):,.2f}`")
 
                 if status == "APPROVED" and pos["recommended_shares"] > 0:
                     if st.button("🟢 Send Protected Bracket Order to Alpaca", type="primary", use_container_width=True):
