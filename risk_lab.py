@@ -7,7 +7,8 @@ from broker_data import get_stock_history, get_paper_account_balance
 def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
     """
     Tests 8 distinct quantitative trading tools/strategies on the target stock,
-    ranks them by risk-adjusted performance, and enforces strict capital guardrails.
+    ranks them by risk-adjusted performance, computes an execution confidence score (%),
+    estimates expected profit/loss in dollars and percentage, and enforces strict guardrails.
     """
     df = get_stock_history(ticker, period=period)
     if df.empty or len(df) < 60:
@@ -95,9 +96,11 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
     equity_curves = {"Dates": df.index.strftime("%Y-%m-%d").tolist()}
     best_strategy = None
     best_score = -999.0
+    best_metrics = {}
 
     for name, sig_col in strategies.items():
-        strat_ret = (df[sig_col].shift(1) * df["Returns"]).fillna(0)
+        shifted_sig = df[sig_col].shift(1).fillna(0)
+        strat_ret = (shifted_sig * df["Returns"]).fillna(0)
         cum_ret = (1 + strat_ret).cumprod()
         equity_curves[name] = [round(float(x), 4) for x in cum_ret.tolist()]
 
@@ -108,6 +111,10 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
         rolling_max = cum_ret.cummax()
         drawdown = (cum_ret - rolling_max) / rolling_max
         max_dd = drawdown.min() * 100
+
+        # Estimate win rate on active trading days
+        active_days = strat_ret[shifted_sig > 0]
+        win_rate_pct = ((active_days > 0).sum() / len(active_days) * 100) if len(active_days) > 0 else 50.0
 
         # Composite Risk-Adjusted Score (rewards high Sharpe and penalizes deep Drawdowns)
         risk_score = round(float(sharpe - (abs(max_dd) / 100.0)), 3)
@@ -122,6 +129,7 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
             "annual_volatility_pct": round(float(ann_vol), 2),
             "sharpe_ratio": round(float(sharpe), 2),
             "max_drawdown_pct": round(float(max_dd), 2),
+            "win_rate_pct": round(float(win_rate_pct), 1),
             "risk_score": risk_score,
             "passed_strict_guardrails": bool(passed_rules)
         }
@@ -129,6 +137,7 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
         if passed_rules and risk_score > best_score:
             best_score = risk_score
             best_strategy = name
+            best_metrics = comparison[name]
 
     # Sort strategies from highest Risk Score to lowest
     comparison = dict(sorted(comparison.items(), key=lambda x: x[1]["risk_score"], reverse=True))
@@ -142,12 +151,44 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
     stop_loss_price = current_price - stop_loss_distance
     take_profit_price = current_price + (stop_loss_distance * RISK_RULES["RISK_REWARD_RATIO"])
     stop_loss_pct = (stop_loss_distance / current_price) * 100
+    take_profit_pct = ((take_profit_price - current_price) / current_price) * 100
 
     account_balance = get_paper_account_balance()
     max_dollar_risk = account_balance * (RISK_RULES["MAX_RISK_PER_TRADE_PCT"] / 100.0)
     recommended_shares = int(max_dollar_risk // stop_loss_distance) if stop_loss_distance > 0 else 0
 
-    risk_status = "APPROVED" if (best_strategy is not None and current_atr_pct <= max_vol) else "REJECTED"
+    vol_ok = current_atr_pct <= max_vol
+    risk_status = "APPROVED" if (best_strategy is not None and vol_ok) else "REJECTED"
+
+    # Execution Confidence Score (0% to 98.5%)
+    top_metric = best_metrics if best_metrics else list(comparison.values())[0]
+    sharpe_component = np.clip((top_metric["sharpe_ratio"] / 2.0) * 40.0, 0.0, 40.0)
+    dd_component = np.clip((1.0 - abs(top_metric["max_drawdown_pct"]) / 40.0) * 25.0, 0.0, 25.0)
+    win_component = np.clip((top_metric["win_rate_pct"] / 100.0) * 20.0, 0.0, 20.0)
+    vol_component = 15.0 if vol_ok else max(0.0, 15.0 - (current_atr_pct - max_vol) * 5.0)
+
+    raw_confidence = sharpe_component + dd_component + win_component + vol_component
+    if risk_status == "REJECTED":
+        raw_confidence = min(raw_confidence, 45.0)
+    execution_confidence_pct = round(float(np.clip(raw_confidence, 5.0, 98.5)), 1)
+
+    # Expected Profit & Loss Forecasts (in USD and %)
+    expected_profit_per_share = max(0.0, take_profit_price - current_price)
+    expected_loss_per_share = max(0.0, current_price - stop_loss_price)
+
+    expected_gross_profit_usd = round(expected_profit_per_share * recommended_shares, 2)
+    expected_max_loss_usd = round(expected_loss_per_share * recommended_shares, 2)
+    expected_position_value_usd = round(current_price * recommended_shares, 2)
+
+    # Probability-weighted expected value (EV) in USD using win rate & R:R
+    p_win = np.clip(top_metric["win_rate_pct"] / 100.0, 0.15, 0.85)
+    p_loss = 1.0 - p_win
+    expected_value_usd = round((p_win * expected_gross_profit_usd) - (p_loss * expected_max_loss_usd), 2)
+
+    # Historical annualized average return forecast on allocated capital
+    years_divisor = 2.0 if period == "2y" else (5.0 if period == "5y" else 1.0)
+    expected_annual_return_pct = round(float(top_metric["total_return_pct"] / years_divisor), 2)
+    expected_annual_profit_usd = round(float(expected_position_value_usd * (expected_annual_return_pct / 100.0)), 2)
 
     return {
         "ticker": ticker.upper(),
@@ -155,7 +196,18 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
         "current_price": round(current_price, 2),
         "current_daily_volatility_pct": round(current_atr_pct, 2),
         "risk_status": risk_status,
+        "execution_confidence_pct": execution_confidence_pct,
         "winning_strategy": best_strategy if best_strategy else "NONE (All 8 tools failed strict guardrails)",
+        "profit_forecast": {
+            "expected_position_value_usd": expected_position_value_usd,
+            "expected_gross_profit_usd": expected_gross_profit_usd,
+            "expected_profit_pct": round(take_profit_pct, 2),
+            "expected_max_loss_usd": expected_max_loss_usd,
+            "expected_value_usd": expected_value_usd,
+            "expected_annual_return_pct": expected_annual_return_pct,
+            "expected_annual_profit_usd": expected_annual_profit_usd,
+            "historical_win_rate_pct": top_metric["win_rate_pct"]
+        },
         "position_sizing": {
             "account_balance": round(account_balance, 2),
             "max_risk_dollars": round(max_dollar_risk, 2),
