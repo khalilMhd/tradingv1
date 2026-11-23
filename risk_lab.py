@@ -4,6 +4,7 @@ from datetime import datetime
 from config import RISK_RULES
 from broker_data import get_stock_history, get_paper_account_balance
 
+
 def run_strategy_experiment(
     ticker: str,
     period: str = "2y",
@@ -13,13 +14,13 @@ def run_strategy_experiment(
     """
     Tests 8 distinct quantitative trading tools/strategies across Stocks/ETFs, Gold, Oil, or Forex,
     ranks them by stability-aware risk-adjusted performance, computes execution confidence (%),
-    forecasts profits, and evaluates desired capital against the 1% account risk guardrail.
+    forecasts profits, evaluates desired capital against the 1% account risk guardrail,
+    and determines the latest actionable trade direction (BUY / SELL / HOLD).
     """
     df = get_stock_history(ticker, period=period)
     if df.empty or len(df) < 60:
         return {"error": f"Insufficient historical data for {ticker} ({market_type})"}
 
-    # Flatten MultiIndex columns if yfinance returns them
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
@@ -194,6 +195,34 @@ def run_strategy_experiment(
         raw_confidence = min(raw_confidence, 45.0)
     execution_confidence_pct = round(float(np.clip(raw_confidence, 5.0, 98.5)), 1)
 
+    # Latest actionable trade direction (BUY / SELL / HOLD)
+    signal_map = {
+        "SMA_Trend_20_50": "Sig_SMA",
+        "EMA_Fast_9_21": "Sig_EMA",
+        "MACD_Momentum": "Sig_MACD",
+        "RSI_Mean_Reversion": "Sig_RSI",
+        "Bollinger_Bands": "Sig_BB",
+        "Donchian_Breakout": "Sig_Donchian",
+        "ADX_Trend_Filter": "Sig_ADX",
+        "Volatility_Guarded_Hybrid": "Sig_Hybrid"
+    }
+
+    rsi_latest = float(df["RSI"].iloc[-1]) if "RSI" in df.columns else 50.0
+    if best_strategy and best_strategy in signal_map and vol_ok:
+        latest_sig = int(df[signal_map[best_strategy]].iloc[-1])
+        if latest_sig == 1:
+            trade_direction = "BUY"
+            direction_reason = f"{best_strategy} is currently bullish/active (signal = 1)."
+        elif best_strategy == "RSI_Mean_Reversion" and rsi_latest > 70:
+            trade_direction = "SELL"
+            direction_reason = f"RSI is overbought ({rsi_latest:.1f} > 70), favoring a short/sell setup."
+        else:
+            trade_direction = "HOLD"
+            direction_reason = f"{best_strategy} is currently flat/not signaling a fresh entry (signal = 0)."
+    else:
+        trade_direction = "HOLD"
+        direction_reason = "Guardrails or volatility filter did not approve an active entry."
+
     # Expected Profit & Loss Forecasts based on Risk-Guarded Recommended Shares
     expected_gross_profit_usd = round(profit_per_share * recommended_shares, 2)
     expected_max_loss_usd = round(loss_per_share * recommended_shares, 2)
@@ -216,6 +245,8 @@ def run_strategy_experiment(
         "current_price": round(current_price, price_decimals),
         "current_daily_volatility_pct": round(current_atr_pct, 2),
         "risk_status": risk_status,
+        "trade_direction": trade_direction,
+        "direction_reason": direction_reason,
         "execution_confidence_pct": execution_confidence_pct,
         "winning_strategy": best_strategy if best_strategy else "NONE (All 8 tools failed strict guardrails)",
         "capital_guidance": {
