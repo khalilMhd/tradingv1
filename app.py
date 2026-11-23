@@ -3,14 +3,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from config import RISK_RULES
 from agent_core import run_autonomous_risk_agent
-from broker_data import execute_paper_bracket_order
+from broker_router import route_trade_execution, calculate_safe_forex_units
 from database import fetch_recent_reports
 
 MARKETS = {
     "Stocks & ETFs": ["SPY", "QQQ", "DIA", "IWM", "NVDA", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD", "TSLA", "JPM", "XOM", "COST"],
     "Gold & Metals": ["GC=F", "GLD", "SI=F"],
     "Oil & Energy": ["CL=F", "BZ=F", "USO"],
-    "Forex": ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDCHF=X"]
+    "Forex": ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDCHF=X", "AUDCAD=X"]
 }
 
 st.set_page_config(page_title="Risk Guard AI Agent", page_icon="🛡️", layout="wide")
@@ -92,15 +92,24 @@ with tab1:
             status = lab["risk_status"]
             exec_conf = lab.get("execution_confidence_pct", 0.0)
             active_market = lab.get("market_type", selected_market)
-            is_alpaca_direct = ("=F" not in lab["ticker"]) and ("=X" not in lab["ticker"])
+            direction = lab.get("trade_direction", "HOLD")
+            dir_reason = lab.get("direction_reason", "")
 
-            st.caption(f"**Active Market:** `{active_market}` | **Symbol:** `{lab['ticker']}`")
+            st.caption(f"**Active Market:** `{active_market}` | **Symbol:** `{lab['ticker']}` | **Winning Strategy:** `{lab['winning_strategy']}`")
 
             # Database save notification
             if res["save_status"]["saved"]:
                 st.toast("Report saved successfully to Supabase!", icon="✅")
             else:
                 st.info(f"Storage Notice: {res['save_status']['message']}")
+
+            # Actionable Direction Banner (BUY / SELL / HOLD)
+            if direction == "BUY":
+                st.success(f"📈 **Suggested Action: BUY (Long)** — {dir_reason}")
+            elif direction == "SELL":
+                st.error(f"📉 **Suggested Action: SELL (Short)** — {dir_reason}")
+            else:
+                st.warning(f"⏸️ **Suggested Action: HOLD (Wait)** — {dir_reason}")
 
             # Top Row: Verdict, Execution Chance %, Current Price, Stop-Loss
             col1, col2, col3, col4 = st.columns(4)
@@ -218,28 +227,49 @@ with tab1:
             with c_exec:
                 st.subheader("⚡ Paper Trading Execution")
                 st.write(f"**Market:** `{active_market}`")
+                st.write(f"**Suggested Action:** `{direction}`")
                 st.write(f"**Paper Account Balance:** `${pos['account_balance']:,.2f}`")
                 st.write(f"**Optimal Safe Capital (1%):** `${cg.get('optimal_safe_capital_usd', 0):,.2f}`")
-                st.write(f"**Guarded Position Size:** `{pos['recommended_shares']}` units (`${pf.get('expected_position_value_usd', 0):,.2f}`)")
                 st.write(f"**Max Dollar Risk (1% Rule):** `${pos['max_risk_dollars']:,.2f}`")
                 st.write(f"**Target Profit at TP (`${pos['take_profit_price']}`):** `+${pf.get('expected_gross_profit_usd', 0):,.2f}`")
 
-                if not is_alpaca_direct:
-                    st.info("ℹ️ Direct Alpaca equity order execution is for stocks/ETFs. Futures/Forex (`=F`, `=X`) run full backtest, risk, profit forecast & 1% sizing analysis here.")
-                elif status == "APPROVED" and pos["recommended_shares"] > 0:
+                is_forex = (active_market == "Forex") or ("=X" in lab["ticker"])
+                is_futures_only = ("=F" in lab["ticker"])
+                base_qty = (
+                    calculate_safe_forex_units(
+                        account_balance=pos["account_balance"],
+                        max_risk_pct=RISK_RULES["MAX_RISK_PER_TRADE_PCT"],
+                        current_price=lab["current_price"],
+                        stop_loss_price=pos["stop_loss_price"]
+                    )
+                    if is_forex
+                    else pos["recommended_shares"]
+                )
+                signed_qty = -abs(base_qty) if (is_forex and direction == "SELL") else abs(base_qty)
+                target_broker = "OANDA Practice" if is_forex else "Alpaca Paper"
+
+                st.write(f"**Execution Size:** `{signed_qty}` {'units' if is_forex else 'shares'} via `{target_broker}`")
+
+                if is_futures_only:
+                    st.info("ℹ️ Futures symbols (`=F`) run full backtest, risk, profit forecast & 1% sizing analysis here without direct equity order routing.")
+                elif status == "APPROVED" and direction in ("BUY", "SELL") and base_qty > 0:
                     if exec_conf < 70.0:
                         st.caption(f"ℹ️ Confidence is {exec_conf}% (below your 70% reference mark — manual execution still available).")
-                    if st.button("🟢 Send Protected Bracket Order to Alpaca", type="primary", use_container_width=True):
-                        exec_res = execute_paper_bracket_order(
+                    if st.button(f"🟢 Send {direction} Order to {target_broker}", type="primary", use_container_width=True):
+                        exec_res = route_trade_execution(
+                            market_type=active_market,
                             ticker=lab["ticker"],
-                            qty=pos["recommended_shares"],
+                            qty=signed_qty,
                             stop_loss_price=pos["stop_loss_price"],
-                            take_profit_price=pos["take_profit_price"]
+                            take_profit_price=pos["take_profit_price"],
+                            current_price=lab["current_price"],
+                            account_balance=pos["account_balance"],
+                            max_risk_pct=RISK_RULES["MAX_RISK_PER_TRADE_PCT"]
                         )
                         st.success("Execution Result:")
                         st.json(exec_res)
                 else:
-                    st.warning("🚫 Execution button locked: Asset or strategies failed strict risk guardrails.")
+                    st.warning("🚫 Execution button locked: No active BUY/SELL signal or guardrails/volatility check did not approve.")
 
 with tab2:
     st.subheader("🗄️ Saved Risk Audits & Experiment Archive")
