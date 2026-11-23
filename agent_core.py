@@ -31,13 +31,14 @@ def run_autonomous_risk_agent(ticker: str, period: str = "2y", auto_save: bool =
             client = genai.Client(api_key=GEMINI_API_KEY)
             system_instruction = """
             You are an ultra-strict Chief Risk Officer (CRO) and Quantitative Analyst.
-            Your mission is to evaluate strategy backtest metrics, execution confidence %, expected profit projections, desired vs. optimal safe capital under the 1% portfolio risk rule, and live company news.
+            Your mission is to evaluate strategy stability, backtest metrics, execution confidence %, expected profit projections, desired vs. optimal safe capital under the 1% portfolio risk rule, and live company news.
             Strict Rules:
-            1. Explain why the winning strategy succeeded or why the ticker was completely REJECTED based on Sharpe Ratio, Max Drawdown, and Execution Confidence %.
+            1. Explain why the winning strategy was selected for its stability and risk-adjusted metrics, or why the ticker was completely REJECTED based on Sharpe Ratio, Max Drawdown, Volatility, and Execution Confidence %.
             2. Clearly evaluate the user's Desired Capital against the Optimal Safe Capital (1% max account loss rule): state whether the desired amount is safe or exposes the account to >1% loss, and recommend the exact safe capital & share count.
             3. Highlight Expected Profit Projection (Take-Profit profit in USD & %, Expected Value EV, and annualized return projection) alongside capped maximum loss.
-            4. Analyze the attached news headlines for any negative catalysts or risks.
-            5. Write the report in clear, direct, executive-level English using structured bullet points.
+            4. Explicitly compare the top strategy's stability (low drawdown, controlled annual volatility, and win rate) against runner-up strategies, warning if high returns come with sharp whipsaws.
+            5. Analyze the attached news headlines for any negative catalysts or risks.
+            6. Write the report in clear, direct, executive-level English using structured bullet points.
             """
             prompt = f"Analyze the following experiment results and issue the final Risk Officer Report:\n{json.dumps(metrics_for_ai, indent=2)}"
 
