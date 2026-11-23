@@ -8,33 +8,34 @@ from database import fetch_recent_reports
 
 st.set_page_config(page_title="Risk Guard AI Agent", page_icon="🛡️", layout="wide")
 
-st.title("🛡️ Risk Guard AI Agent — مختبر إدارة المخاطر والتداول التجريبي")
-st.caption("نظام مستقل لاختبار استراتيجيات الأسهم، فرض قواعد الحماية الصارمة، وتنفيذ صفقات Paper Trading محمية.")
+st.title("🛡️ Risk Guard AI Agent — Autonomous Risk & Paper Trading Lab")
+st.caption("Independent quantitative agent for backtesting equity strategies, enforcing strict risk guardrails, and executing protected paper trades.")
 
-# الشريط الجانبي: القواعد الصارمة وإعدادات التجربة
+# Sidebar: Experiment Settings & Hard Guardrails
 with st.sidebar:
-    st.header("⚙️ إعدادات التجربة")
-    ticker_input = st.text_input("رمز السهم (Ticker)", value="AAPL").upper().strip()
-    period_input = st.selectbox("فترة الاختبار التاريخي", ["1y", "2y", "5y"], index=1)
-    auto_save = st.checkbox("حفظ التقرير تلقائياً في Supabase", value=True)
-    run_btn = st.button("🚀 إطلاق الـ Agent للفحص والتجربة", type="primary", use_container_width=True)
+    st.header("⚙️ Experiment Settings")
+    ticker_input = st.text_input("Stock Ticker", value="AAPL").upper().strip()
+    period_input = st.selectbox("Backtest Lookback Period", ["1y", "2y", "5y"], index=1)
+    auto_save = st.checkbox("Auto-save report to Supabase", value=True)
+    run_btn = st.button("🚀 Run Risk Agent Audit", type="primary", use_container_width=True)
 
     st.divider()
-    st.subheader("🔒 القواعد الصارمة المفعلة")
+    st.subheader("🔒 Active Hard Guardrails")
     st.markdown(f"""
-    - **أقصى مخاطرة للصفقة:** `{RISK_RULES['MAX_RISK_PER_TRADE_PCT']}%` من الرصيد
-    - **أقصى هبوط مسموح (Max DD):** `{RISK_RULES['MAX_ALLOWED_DRAWDOWN_PCT']}%`
-    - **أدنى معامل أمان (Sharpe):** `{RISK_RULES['MIN_SHARPE_RATIO']}`
-    - **أقصى تذبذب يومي:** `{RISK_RULES['MAX_DAILY_VOLATILITY_PCT']}%`
-    - **مضاعف وقف الخسارة:** `{RISK_RULES['ATR_STOP_LOSS_MULTIPLIER']}x ATR`
+    - **Max Risk Per Trade:** `{RISK_RULES['MAX_RISK_PER_TRADE_PCT']}%` of equity
+    - **Max Allowed Drawdown:** `{RISK_RULES['MAX_ALLOWED_DRAWDOWN_PCT']}%`
+    - **Minimum Sharpe Ratio:** `{RISK_RULES['MIN_SHARPE_RATIO']}`
+    - **Max Daily Volatility (ATR):** `{RISK_RULES['MAX_DAILY_VOLATILITY_PCT']}%`
+    - **Dynamic Stop-Loss:** `{RISK_RULES['ATR_STOP_LOSS_MULTIPLIER']}x ATR`
+    - **Target Risk/Reward:** `1:{RISK_RULES['RISK_REWARD_RATIO']}`
     """)
 
-# التبويبات الرئيسية
-tab1, tab2 = st.tabs(["🔬 مختبر التجارب الحية والتنفيذ", "🗄️ سجل التقارير المحفوظة (Supabase)"])
+# Main Navigation Tabs
+tab1, tab2 = st.tabs(["🔬 Live Strategy Lab & Execution", "🗄️ Saved Reports Archive (Supabase)"])
 
 with tab1:
     if run_btn and ticker_input:
-        with st.spinner(f"جاري تشغيل التجارب، تحليل أخبار {ticker_input}، وتطبيق فلاتر المخاطر..."):
+        with st.spinner(f"Running backtests, scanning {ticker_input} news, and enforcing risk guardrails..."):
             result = run_autonomous_risk_agent(ticker_input, period=period_input, auto_save=auto_save)
             st.session_state["last_result"] = result
 
@@ -47,84 +48,100 @@ with tab1:
             pos = lab["position_sizing"]
             status = lab["risk_status"]
 
-            # حالة الحفظ في قاعدة البيانات
+            # Database save notification
             if res["save_status"]["saved"]:
-                st.toast(res["save_status"]["message"], icon="✅")
+                st.toast("Report saved successfully to Supabase!", icon="✅")
             else:
-                st.info(f"ملاحظة الحفظ: {res['save_status']['message']}")
+                st.info(f"Storage Notice: {res['save_status']['message']}")
 
-            # شريط المؤشرات الرئيسية
+            # Key Metrics Bar
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("قرار الـ Agent", status, delta="آمن للتنفيذ" if status == "APPROVED" else "مرفوض لخطورته", delta_color="normal" if status == "APPROVED" else "inverse")
-            col2.metric("الأداة الفائزة", lab["winning_strategy"].split()[0])
-            col3.metric("السعر الحالي / التقلب", f"${lab['current_price']}", f"ATR: {lab['current_daily_volatility_pct']}%")
-            col4.metric("وقف الخسارة الإجباري", f"${pos['stop_loss_price']}", f"-{pos['stop_loss_pct']}%", delta_color="inverse")
+            col1.metric(
+                "Agent Verdict",
+                status,
+                delta="Safe to Execute" if status == "APPROVED" else "Rejected (High Risk)",
+                delta_color="normal" if status == "APPROVED" else "inverse"
+            )
+            col2.metric("Winning Strategy", lab["winning_strategy"].split()[0])
+            col3.metric("Current Price / Volatility", f"${lab['current_price']}", f"ATR: {lab['current_daily_volatility_pct']}%")
+            col4.metric("Mandatory Stop-Loss", f"${pos['stop_loss_price']}", f"-{pos['stop_loss_pct']}%", delta_color="inverse")
 
             st.divider()
 
-            # الرسم البياني لمقارنة أداء الاستراتيجيات
-            st.subheader("📈 مقارنة المنحنى التراكمي للأدوات (Backtest Equity Curves)")
+            # Cumulative Equity Curves Chart
+            st.subheader("📈 Strategy Backtest Equity Curves")
             curves = lab["equity_curves"]
             fig = go.Figure()
             dates = curves["Dates"]
             for strat_name, values in curves.items():
                 if strat_name != "Dates":
                     fig.add_trace(go.Scatter(x=dates, y=values, mode="lines", name=strat_name))
-            fig.update_layout(height=400, xaxis_title="التاريخ", yaxis_title="نمو رأس المال (1.0 = البداية)", hovermode="x unified")
+            fig.update_layout(
+                height=400,
+                xaxis_title="Date",
+                yaxis_title="Cumulative Return (1.0 = Initial Capital)",
+                hovermode="x unified"
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-            # جدول مقارنة مقاييس المخاطر
-            st.subheader("📊 جدول مقارنة مقاييس المخاطر والعائد")
+            # Strategy Risk Comparison Table
+            st.subheader("📊 Quantitative Risk & Return Comparison")
             comp_df = pd.DataFrame(lab["strategies_comparison"]).T
-            comp_df.columns = ["العائد الإجمالي (%)", "التقلب السنوي (%)", "معامل شارب (Sharpe)", "أقصى هبوط (Max DD %)", "اجتاز شروط الأمان؟"]
+            comp_df.columns = [
+                "Total Return (%)",
+                "Annual Volatility (%)",
+                "Sharpe Ratio",
+                "Max Drawdown (%)",
+                "Passed Guardrails?"
+            ]
             st.dataframe(comp_df, use_container_width=True)
 
-            # قسم التقرير التحليلي للـ AI والأخبار
+            # AI CRO Report & Paper Execution Panel
             c_ai, c_exec = st.columns([2, 1])
             with c_ai:
-                st.subheader("🧠 تقرير مدير المخاطر (AI Risk Report)")
+                st.subheader("🧠 Chief Risk Officer (AI Report)")
                 st.markdown(res["ai_summary"])
 
-                with st.expander("📰 أحدث أخبار الشركة التي تم فحصها"):
+                with st.expander("📰 Recent Company News Scanned"):
                     for n in res["news"]:
                         st.write(n)
 
             with c_exec:
-                st.subheader("⚡ التنفيذ في حساب التداول التجريبي")
-                st.write(f"**رصيد الحساب التجريبي:** `${pos['account_balance']:,.2f}`")
-                st.write(f"**الحد الأقصى للخسارة (1%):** `${pos['max_risk_dollars']:,.2f}`")
-                st.write(f"**الكمية المحسوبة بدقة:** `{pos['recommended_shares']}` سهم")
-                st.write(f"**هدف جني الأرباح (1:2):** `${pos['take_profit_price']}`")
+                st.subheader("⚡ Paper Trading Execution")
+                st.write(f"**Paper Account Balance:** `${pos['account_balance']:,.2f}`")
+                st.write(f"**Max Dollar Risk (1% Rule):** `${pos['max_risk_dollars']:,.2f}`")
+                st.write(f"**Calculated Position Size:** `{pos['recommended_shares']}` shares")
+                st.write(f"**Take-Profit Target (1:2):** `${pos['take_profit_price']}`")
 
                 if status == "APPROVED" and pos["recommended_shares"] > 0:
-                    if st.button("🟢 إرسال الصفقة المحمية إلى موقع Alpaca", type="primary", use_container_width=True):
+                    if st.button("🟢 Send Protected Bracket Order to Alpaca", type="primary", use_container_width=True):
                         exec_res = execute_paper_bracket_order(
                             ticker=lab["ticker"],
                             qty=pos["recommended_shares"],
                             stop_loss_price=pos["stop_loss_price"],
                             take_profit_price=pos["take_profit_price"]
                         )
-                        st.success("نتيجة التنفيذ:")
+                        st.success("Execution Result:")
                         st.json(exec_res)
                 else:
-                    st.warning("🚫 زر التنفيذ مقفل تلقائياً لأن السهم أو الاستراتيجية لم تجتز شروط الأمان الصارمة.")
+                    st.warning("🚫 Execution button locked: Ticker or strategies failed strict risk guardrails.")
 
 with tab2:
-    st.subheader("🗄️ أرشيف التجارب والتقارير المحفوظة")
-    if st.button("🔄 تحديث السجل"):
+    st.subheader("🗄️ Saved Risk Audits & Experiment Archive")
+    if st.button("🔄 Refresh Archive"):
         st.rerun()
 
     reports = fetch_recent_reports(limit=20)
     if not reports:
-        st.info("لا توجد تقارير محفوظة حالياً (أو تأكد من إضافة مفاتيح Supabase في ملف .env).")
+        st.info("No saved reports found yet (or verify Supabase credentials in Secrets).")
     else:
         summary_table = []
         for r in reports:
             summary_table.append({
-                "التاريخ": r.get("created_at", "")[:16].replace("T", " "),
-                "السهم": r.get("ticker"),
-                "القرار": r.get("risk_status"),
-                "الأداة الفائزة": r.get("winning_strategy"),
+                "Timestamp": r.get("created_at", "")[:16].replace("T", " "),
+                "Ticker": r.get("ticker"),
+                "Verdict": r.get("risk_status"),
+                "Winning Strategy": r.get("winning_strategy"),
                 "Sharpe": r.get("sharpe_ratio"),
                 "Max DD (%)": r.get("max_drawdown"),
                 "Stop Loss (%)": r.get("stop_loss_pct")
@@ -132,5 +149,9 @@ with tab2:
         st.dataframe(pd.DataFrame(summary_table), use_container_width=True)
 
         st.divider()
-        selected_idx = st.selectbox("اختر تقريراً لقراءة التفاصيل الكاملة:", range(len(reports)), format_func=lambda i: f"{reports[i]['ticker']} — {reports[i]['created_at'][:10]} ({reports[i]['risk_status']})")
+        selected_idx = st.selectbox(
+            "Select an audit report to view full CRO analysis:",
+            range(len(reports)),
+            format_func=lambda i: f"{reports[i]['ticker']} — {reports[i]['created_at'][:10]} ({reports[i]['risk_status']})"
+        )
         st.markdown(reports[selected_idx].get("ai_summary", ""))
