@@ -9,13 +9,21 @@ from database import fetch_recent_reports
 st.set_page_config(page_title="Risk Guard AI Agent", page_icon="🛡️", layout="wide")
 
 st.title("🛡️ Risk Guard AI Agent — Autonomous Risk & Paper Trading Lab")
-st.caption("Independent quantitative agent for backtesting equity strategies, computing execution confidence & profit forecasts, enforcing strict risk guardrails, and executing protected paper trades.")
+st.caption("Independent quantitative agent for backtesting equity strategies, computing execution confidence & profit forecasts, enforcing 1% risk guardrails, and executing protected paper trades.")
 
-# Sidebar: Experiment Settings & Hard Guardrails
+# Sidebar: Experiment Settings, Capital Slider & Hard Guardrails
 with st.sidebar:
     st.header("⚙️ Experiment Settings")
     ticker_input = st.text_input("Stock Ticker", value="AAPL").upper().strip()
     period_input = st.selectbox("Backtest Lookback Period", ["1y", "2y", "5y"], index=1)
+    desired_capital = st.slider(
+        "Desired Capital to Allocate ($)",
+        min_value=500,
+        max_value=100000,
+        value=10000,
+        step=500,
+        help="Enter the dollar amount you consider putting into this trade. The agent compares it against the 1% account risk cap."
+    )
     auto_save = st.checkbox("Auto-save report to Supabase", value=True)
     run_btn = st.button("🚀 Run Risk Agent Audit", type="primary", use_container_width=True)
 
@@ -35,8 +43,13 @@ tab1, tab2 = st.tabs(["🔬 Live Strategy Lab & Execution", "🗄️ Saved Repor
 
 with tab1:
     if run_btn and ticker_input:
-        with st.spinner(f"Running backtests, computing execution odds & profit forecast for {ticker_input}, and scanning news..."):
-            result = run_autonomous_risk_agent(ticker_input, period=period_input, auto_save=auto_save)
+        with st.spinner(f"Running backtests, computing execution odds, profit forecast & 1% capital cap for {ticker_input}..."):
+            result = run_autonomous_risk_agent(
+                ticker_input,
+                period=period_input,
+                auto_save=auto_save,
+                desired_capital=float(desired_capital)
+            )
             st.session_state["last_result"] = result
 
     if "last_result" in st.session_state:
@@ -47,6 +60,7 @@ with tab1:
             lab = res["lab_results"]
             pos = lab["position_sizing"]
             pf = lab.get("profit_forecast", {})
+            cg = lab.get("capital_guidance", {})
             status = lab["risk_status"]
             exec_conf = lab.get("execution_confidence_pct", 0.0)
 
@@ -74,8 +88,36 @@ with tab1:
 
             st.progress(min(max(exec_conf / 100.0, 0.0), 1.0), text=f"Execution Readiness & Signal Quality Score: {exec_conf}%")
 
-            # Second Row: Expected Profit & Risk Forecast Cards
-            st.subheader("💰 Expected Profit & Trade Forecast")
+            # Capital Allocation Advisor Box (Desired vs. Optimal Safe Capital under 1% Rule)
+            st.subheader("🎯 Capital Allocation Advisor (1% Account Risk Rule)")
+            c_adv1, c_adv2, c_adv3 = st.columns(3)
+            c_adv1.metric("Your Desired Amount", f"${cg.get('desired_capital_usd', 0):,.2f}", delta=f"{cg.get('desired_shares', 0)} shares")
+            c_adv2.metric(
+                "Optimal Safe Capital (≤1% Risk)",
+                f"${cg.get('optimal_safe_capital_usd', 0):,.2f}",
+                delta=f"Safe cap: {cg.get('safe_cap_shares', 0)} shares"
+            )
+            c_adv3.metric(
+                "Est. Loss on Desired Amount",
+                f"-${cg.get('desired_potential_loss_usd', 0):,.2f}",
+                delta=f"Max 1% budget: ${pos['max_risk_dollars']:,.2f}",
+                delta_color="inverse"
+            )
+
+            if cg.get("exceeds_1pct_risk"):
+                st.warning(
+                    f"⚠️ Putting **${cg.get('desired_capital_usd', 0):,.2f}** risks **-${cg.get('desired_potential_loss_usd', 0):,.2f}** if Stop-Loss hits, "
+                    f"which exceeds your **1% account risk limit (${pos['max_risk_dollars']:,.2f})**. "
+                    f"Recommended safe capital: **${cg.get('optimal_safe_capital_usd', 0):,.2f}** (`{cg.get('safe_cap_shares', 0)}` shares)."
+                )
+            else:
+                st.success(
+                    f"✅ Your desired amount (**${cg.get('desired_capital_usd', 0):,.2f}**, est. loss **-${cg.get('desired_potential_loss_usd', 0):,.2f}**, "
+                    f"est. target profit **+${cg.get('desired_potential_profit_usd', 0):,.2f}**) stays within your **1% risk limit (${pos['max_risk_dollars']:,.2f})**."
+                )
+
+            # Expected Profit & Trade Forecast Cards
+            st.subheader("💰 Expected Profit & Trade Forecast (1% Guarded Position)")
             p1, p2, p3, p4 = st.columns(4)
             p1.metric(
                 "Target Profit (Take-Profit)",
@@ -144,11 +186,14 @@ with tab1:
             with c_exec:
                 st.subheader("⚡ Paper Trading Execution")
                 st.write(f"**Paper Account Balance:** `${pos['account_balance']:,.2f}`")
-                st.write(f"**Estimated Position Size:** `${pf.get('expected_position_value_usd', 0):,.2f}` (`{pos['recommended_shares']}` shares)")
+                st.write(f"**Optimal Safe Capital (1%):** `${cg.get('optimal_safe_capital_usd', 0):,.2f}`")
+                st.write(f"**Guarded Position Size:** `{pos['recommended_shares']}` shares (`${pf.get('expected_position_value_usd', 0):,.2f}`)")
                 st.write(f"**Max Dollar Risk (1% Rule):** `${pos['max_risk_dollars']:,.2f}`")
                 st.write(f"**Target Profit at TP (`${pos['take_profit_price']}`):** `+${pf.get('expected_gross_profit_usd', 0):,.2f}`")
 
                 if status == "APPROVED" and pos["recommended_shares"] > 0:
+                    if exec_conf < 70.0:
+                        st.caption(f"ℹ️ Confidence is {exec_conf}% (below your 70% reference mark — manual execution still available).")
                     if st.button("🟢 Send Protected Bracket Order to Alpaca", type="primary", use_container_width=True):
                         exec_res = execute_paper_bracket_order(
                             ticker=lab["ticker"],
