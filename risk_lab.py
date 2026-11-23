@@ -4,11 +4,11 @@ from datetime import datetime
 from config import RISK_RULES
 from broker_data import get_stock_history, get_paper_account_balance
 
-def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
+def run_strategy_experiment(ticker: str, period: str = "2y", desired_capital: float = 10000.0) -> dict:
     """
     Tests 8 distinct quantitative trading tools/strategies on the target stock,
-    ranks them by risk-adjusted performance, computes an execution confidence score (%),
-    estimates expected profit/loss in dollars and percentage, and enforces strict guardrails.
+    ranks them by risk-adjusted performance, computes execution confidence (%),
+    forecasts profits, and evaluates desired capital against the 1% account risk guardrail.
     """
     df = get_stock_history(ticker, period=period)
     if df.empty or len(df) < 60:
@@ -112,11 +112,9 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
         drawdown = (cum_ret - rolling_max) / rolling_max
         max_dd = drawdown.min() * 100
 
-        # Estimate win rate on active trading days
         active_days = strat_ret[shifted_sig > 0]
         win_rate_pct = ((active_days > 0).sum() / len(active_days) * 100) if len(active_days) > 0 else 50.0
 
-        # Composite Risk-Adjusted Score (rewards high Sharpe and penalizes deep Drawdowns)
         risk_score = round(float(sharpe - (abs(max_dd) / 100.0)), 3)
 
         passed_rules = (
@@ -139,10 +137,9 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
             best_strategy = name
             best_metrics = comparison[name]
 
-    # Sort strategies from highest Risk Score to lowest
     comparison = dict(sorted(comparison.items(), key=lambda x: x[1]["risk_score"], reverse=True))
 
-    # Position sizing and mandatory ATR stop-loss
+    # Price, Volatility, ATR Stop-Loss & Take-Profit
     current_price = float(df["Close"].iloc[-1])
     current_atr = float(df["ATR"].iloc[-1])
     current_atr_pct = float(df["ATR_Pct"].iloc[-1])
@@ -153,9 +150,24 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
     stop_loss_pct = (stop_loss_distance / current_price) * 100
     take_profit_pct = ((take_profit_price - current_price) / current_price) * 100
 
+    # 1% Account Risk Budget & Optimal Safe Capital
     account_balance = get_paper_account_balance()
     max_dollar_risk = account_balance * (RISK_RULES["MAX_RISK_PER_TRADE_PCT"] / 100.0)
     recommended_shares = int(max_dollar_risk // stop_loss_distance) if stop_loss_distance > 0 else 0
+
+    # Optimal capital that keeps worst-case stop-loss loss <= 1% of account balance
+    sl_fraction = max(stop_loss_pct / 100.0, 1e-6)
+    optimal_safe_capital_usd = round(min(account_balance, max_dollar_risk / sl_fraction), 2)
+
+    # Evaluate user's desired capital slider input
+    desired_capital_clean = round(float(desired_capital), 2)
+    desired_shares_raw = int(desired_capital_clean // current_price) if current_price > 0 else 0
+    loss_per_share = max(0.0, current_price - stop_loss_price)
+    profit_per_share = max(0.0, take_profit_price - current_price)
+
+    desired_potential_loss_usd = round(desired_shares_raw * loss_per_share, 2)
+    desired_potential_profit_usd = round(desired_shares_raw * profit_per_share, 2)
+    exceeds_1pct_risk = desired_potential_loss_usd > (max_dollar_risk + 0.01)
 
     vol_ok = current_atr_pct <= max_vol
     risk_status = "APPROVED" if (best_strategy is not None and vol_ok) else "REJECTED"
@@ -172,20 +184,15 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
         raw_confidence = min(raw_confidence, 45.0)
     execution_confidence_pct = round(float(np.clip(raw_confidence, 5.0, 98.5)), 1)
 
-    # Expected Profit & Loss Forecasts (in USD and %)
-    expected_profit_per_share = max(0.0, take_profit_price - current_price)
-    expected_loss_per_share = max(0.0, current_price - stop_loss_price)
-
-    expected_gross_profit_usd = round(expected_profit_per_share * recommended_shares, 2)
-    expected_max_loss_usd = round(expected_loss_per_share * recommended_shares, 2)
+    # Expected Profit & Loss Forecasts based on Risk-Guarded Recommended Shares
+    expected_gross_profit_usd = round(profit_per_share * recommended_shares, 2)
+    expected_max_loss_usd = round(loss_per_share * recommended_shares, 2)
     expected_position_value_usd = round(current_price * recommended_shares, 2)
 
-    # Probability-weighted expected value (EV) in USD using win rate & R:R
     p_win = np.clip(top_metric["win_rate_pct"] / 100.0, 0.15, 0.85)
     p_loss = 1.0 - p_win
     expected_value_usd = round((p_win * expected_gross_profit_usd) - (p_loss * expected_max_loss_usd), 2)
 
-    # Historical annualized average return forecast on allocated capital
     years_divisor = 2.0 if period == "2y" else (5.0 if period == "5y" else 1.0)
     expected_annual_return_pct = round(float(top_metric["total_return_pct"] / years_divisor), 2)
     expected_annual_profit_usd = round(float(expected_position_value_usd * (expected_annual_return_pct / 100.0)), 2)
@@ -198,6 +205,15 @@ def run_strategy_experiment(ticker: str, period: str = "2y") -> dict:
         "risk_status": risk_status,
         "execution_confidence_pct": execution_confidence_pct,
         "winning_strategy": best_strategy if best_strategy else "NONE (All 8 tools failed strict guardrails)",
+        "capital_guidance": {
+            "desired_capital_usd": desired_capital_clean,
+            "optimal_safe_capital_usd": optimal_safe_capital_usd,
+            "desired_shares": desired_shares_raw,
+            "desired_potential_loss_usd": desired_potential_loss_usd,
+            "desired_potential_profit_usd": desired_potential_profit_usd,
+            "exceeds_1pct_risk": bool(exceeds_1pct_risk),
+            "safe_cap_shares": recommended_shares
+        },
         "profit_forecast": {
             "expected_position_value_usd": expected_position_value_usd,
             "expected_gross_profit_usd": expected_gross_profit_usd,
