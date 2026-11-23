@@ -9,7 +9,7 @@ from database import save_risk_report
 def run_autonomous_risk_agent(ticker: str, period: str = "2y", auto_save: bool = True) -> dict:
     """
     Runs the full Risk Guard Agent:
-    1. Executes quantitative strategy backtests.
+    1. Executes quantitative strategy backtests + execution probability + profit forecasts.
     2. Fetches live company news.
     3. Passes metrics and news to Gemini to evaluate qualitative/quantitative risk and issue a strict decision.
     4. Saves the report to Supabase.
@@ -34,11 +34,11 @@ def run_autonomous_risk_agent(ticker: str, period: str = "2y", auto_save: bool =
             client = genai.Client(api_key=GEMINI_API_KEY)
             system_instruction = """
             You are an ultra-strict Chief Risk Officer (CRO) and Quantitative Analyst.
-            Your mission is to evaluate strategy backtest metrics and live company news to protect capital and minimize drawdowns.
+            Your mission is to evaluate strategy backtest metrics, execution confidence %, expected profit projections, and live company news to protect capital and minimize drawdowns.
             Strict Rules:
-            1. Explain why the winning strategy succeeded or why the ticker was completely REJECTED based on Sharpe Ratio and Max Drawdown.
-            2. Analyze the attached news headlines: flag any severe negative catalysts (earnings misses, lawsuits, regulatory probes, sector headwinds) that warrant caution even if historical metrics look good.
-            3. Explicitly state the capital protection plan: Current Price, Mandatory ATR Stop-Loss, Take-Profit target, and exact Position Size (1% max portfolio risk rule).
+            1. Explain why the winning strategy succeeded or why the ticker was completely REJECTED based on Sharpe Ratio, Max Drawdown, and Execution Confidence %.
+            2. Clearly highlight the Expected Profit Projection (Take-Profit target profit in USD & %, Expected Value EV, and annualized return projection) alongside the maximum capped loss (1% portfolio rule).
+            3. Analyze the attached news headlines: flag any severe negative catalysts (earnings misses, lawsuits, regulatory probes, sector headwinds) that warrant caution even if historical metrics look good.
             4. Write the report in clear, direct, executive-level English using structured bullet points.
             """
             prompt = f"Analyze the following experiment results and issue the final Risk Officer Report:\n{json.dumps(metrics_for_ai, indent=2)}"
