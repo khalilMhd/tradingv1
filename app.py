@@ -6,15 +6,33 @@ from agent_core import run_autonomous_risk_agent
 from broker_data import execute_paper_bracket_order
 from database import fetch_recent_reports
 
+WATCHLIST_TICKERS = [
+    "SPY", "QQQ", "DIA", "IWM",
+    "NVDA", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD",
+    "TSLA", "JPM", "XOM", "COST"
+]
+
 st.set_page_config(page_title="Risk Guard AI Agent", page_icon="🛡️", layout="wide")
 
 st.title("🛡️ Risk Guard AI Agent — Autonomous Risk & Paper Trading Lab")
 st.caption("Independent quantitative agent for backtesting equity strategies, computing execution confidence & profit forecasts, enforcing 1% risk guardrails, and executing protected paper trades.")
 
-# Sidebar: Experiment Settings, Capital Slider & Hard Guardrails
+# Sidebar: Quick Watchlist, Ticker Input, Capital Slider & Hard Guardrails
 with st.sidebar:
     st.header("⚙️ Experiment Settings")
-    ticker_input = st.text_input("Stock Ticker", value="AAPL").upper().strip()
+
+    selected_preset = st.selectbox(
+        "Quick Watchlist Selector",
+        options=WATCHLIST_TICKERS,
+        index=0,
+        help="Pick a symbol directly without copying and pasting every time."
+    )
+    use_custom = st.checkbox("Type a custom ticker manually", value=False)
+    if use_custom:
+        ticker_input = st.text_input("Custom Stock Ticker", value=selected_preset).upper().strip()
+    else:
+        ticker_input = selected_preset
+
     period_input = st.selectbox("Backtest Lookback Period", ["1y", "2y", "5y"], index=1)
     desired_capital = st.slider(
         "Desired Capital to Allocate ($)",
@@ -86,7 +104,7 @@ with tab1:
             col3.metric("Current Price / Volatility", f"${lab['current_price']}", f"ATR: {lab['current_daily_volatility_pct']}%")
             col4.metric("Mandatory Stop-Loss", f"${pos['stop_loss_price']}", f"-{pos['stop_loss_pct']}%", delta_color="inverse")
 
-            st.progress(min(max(exec_conf / 100.0, 0.0), 1.0), text=f"Execution Readiness & Signal Quality Score: {exec_conf}%")
+            st.progress(min(max(exec_conf / 100.0, 0.0), 1.0), text=f"Execution Readiness & Signal Quality Score: {exec_conf}% (70%+ reference benchmark)")
 
             # Capital Allocation Advisor Box (Desired vs. Optimal Safe Capital under 1% Rule)
             st.subheader("🎯 Capital Allocation Advisor (1% Account Risk Rule)")
