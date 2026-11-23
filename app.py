@@ -84,16 +84,17 @@ with tab1:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Strategy Risk Comparison Table
+            # Strategy Risk Comparison Table (Safe column renaming for 6+ columns)
             st.subheader("📊 Quantitative Risk & Return Comparison")
             comp_df = pd.DataFrame(lab["strategies_comparison"]).T
-            comp_df.columns = [
-                "Total Return (%)",
-                "Annual Volatility (%)",
-                "Sharpe Ratio",
-                "Max Drawdown (%)",
-                "Passed Guardrails?"
-            ]
+            comp_df = comp_df.rename(columns={
+                "total_return_pct": "Total Return (%)",
+                "annual_volatility_pct": "Annual Volatility (%)",
+                "sharpe_ratio": "Sharpe Ratio",
+                "max_drawdown_pct": "Max Drawdown (%)",
+                "risk_score": "Risk Score",
+                "passed_strict_guardrails": "Passed Guardrails?"
+            })
             st.dataframe(comp_df, use_container_width=True)
 
             # AI CRO Report & Paper Execution Panel
@@ -138,7 +139,7 @@ with tab2:
         summary_table = []
         for r in reports:
             summary_table.append({
-                "Timestamp": r.get("created_at", "")[:16].replace("T", " "),
+                "Timestamp": str(r.get("created_at", ""))[:16].replace("T", " "),
                 "Ticker": r.get("ticker"),
                 "Verdict": r.get("risk_status"),
                 "Winning Strategy": r.get("winning_strategy"),
@@ -152,6 +153,6 @@ with tab2:
         selected_idx = st.selectbox(
             "Select an audit report to view full CRO analysis:",
             range(len(reports)),
-            format_func=lambda i: f"{reports[i]['ticker']} — {reports[i]['created_at'][:10]} ({reports[i]['risk_status']})"
+            format_func=lambda i: f"{reports[i]['ticker']} — {str(reports[i].get('created_at', ''))[:10]} ({reports[i]['risk_status']})"
         )
         st.markdown(reports[selected_idx].get("ai_summary", ""))
