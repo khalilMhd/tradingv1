@@ -6,30 +6,39 @@ from agent_core import run_autonomous_risk_agent
 from broker_data import execute_paper_bracket_order
 from database import fetch_recent_reports
 
-WATCHLIST_TICKERS = [
-    "SPY", "QQQ", "DIA", "IWM",
-    "NVDA", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD",
-    "TSLA", "JPM", "XOM", "COST"
-]
+MARKETS = {
+    "Stocks & ETFs": ["SPY", "QQQ", "DIA", "IWM", "NVDA", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD", "TSLA", "JPM", "XOM", "COST"],
+    "Gold & Metals": ["GC=F", "GLD", "SI=F"],
+    "Oil & Energy": ["CL=F", "BZ=F", "USO"],
+    "Forex": ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDCHF=X"]
+}
 
 st.set_page_config(page_title="Risk Guard AI Agent", page_icon="🛡️", layout="wide")
 
-st.title("🛡️ Risk Guard AI Agent — Autonomous Risk & Paper Trading Lab")
-st.caption("Independent quantitative agent for backtesting equity strategies, computing execution confidence & profit forecasts, enforcing 1% risk guardrails, and executing protected paper trades.")
+st.title("🛡️ Risk Guard AI Agent — Multi-Market Risk & Paper Trading Lab")
+st.caption("Independent quantitative agent across Stocks/ETFs, Gold, Oil, and Forex — backtesting strategies, computing execution confidence & profit forecasts, enforcing 1% risk guardrails, and executing protected paper trades.")
 
-# Sidebar: Quick Watchlist, Ticker Input, Capital Slider & Hard Guardrails
+# Sidebar: Market Selector, Quick Asset List, Capital Slider & Hard Guardrails
 with st.sidebar:
     st.header("⚙️ Experiment Settings")
 
-    selected_preset = st.selectbox(
-        "Quick Watchlist Selector",
-        options=WATCHLIST_TICKERS,
-        index=0,
-        help="Pick a symbol directly without copying and pasting every time."
+    selected_market = st.selectbox(
+        "Select Market",
+        options=list(MARKETS.keys()),
+        index=0
     )
-    use_custom = st.checkbox("Type a custom ticker manually", value=False)
+
+    market_assets = MARKETS[selected_market]
+    selected_preset = st.selectbox(
+        f"{selected_market} Quick Selector",
+        options=market_assets,
+        index=0,
+        help="Select an asset directly from the chosen market."
+    )
+
+    use_custom = st.checkbox("Type a custom symbol manually", value=False)
     if use_custom:
-        ticker_input = st.text_input("Custom Stock Ticker", value=selected_preset).upper().strip()
+        ticker_input = st.text_input("Custom Symbol / Ticker", value=selected_preset).upper().strip()
     else:
         ticker_input = selected_preset
 
@@ -61,12 +70,13 @@ tab1, tab2 = st.tabs(["🔬 Live Strategy Lab & Execution", "🗄️ Saved Repor
 
 with tab1:
     if run_btn and ticker_input:
-        with st.spinner(f"Running backtests, computing execution odds, profit forecast & 1% capital cap for {ticker_input}..."):
+        with st.spinner(f"Running backtests across {selected_market} ({ticker_input}), computing execution odds, profit forecast & 1% capital cap..."):
             result = run_autonomous_risk_agent(
                 ticker_input,
                 period=period_input,
                 auto_save=auto_save,
-                desired_capital=float(desired_capital)
+                desired_capital=float(desired_capital),
+                market_type=selected_market
             )
             st.session_state["last_result"] = result
 
@@ -81,6 +91,10 @@ with tab1:
             cg = lab.get("capital_guidance", {})
             status = lab["risk_status"]
             exec_conf = lab.get("execution_confidence_pct", 0.0)
+            active_market = lab.get("market_type", selected_market)
+            is_alpaca_direct = ("=F" not in lab["ticker"]) and ("=X" not in lab["ticker"])
+
+            st.caption(f"**Active Market:** `{active_market}` | **Symbol:** `{lab['ticker']}`")
 
             # Database save notification
             if res["save_status"]["saved"]:
@@ -109,11 +123,11 @@ with tab1:
             # Capital Allocation Advisor Box (Desired vs. Optimal Safe Capital under 1% Rule)
             st.subheader("🎯 Capital Allocation Advisor (1% Account Risk Rule)")
             c_adv1, c_adv2, c_adv3 = st.columns(3)
-            c_adv1.metric("Your Desired Amount", f"${cg.get('desired_capital_usd', 0):,.2f}", delta=f"{cg.get('desired_shares', 0)} shares")
+            c_adv1.metric("Your Desired Amount", f"${cg.get('desired_capital_usd', 0):,.2f}", delta=f"{cg.get('desired_shares', 0)} units")
             c_adv2.metric(
                 "Optimal Safe Capital (≤1% Risk)",
                 f"${cg.get('optimal_safe_capital_usd', 0):,.2f}",
-                delta=f"Safe cap: {cg.get('safe_cap_shares', 0)} shares"
+                delta=f"Safe cap: {cg.get('safe_cap_shares', 0)} units"
             )
             c_adv3.metric(
                 "Est. Loss on Desired Amount",
@@ -126,7 +140,7 @@ with tab1:
                 st.warning(
                     f"⚠️ Putting **${cg.get('desired_capital_usd', 0):,.2f}** risks **-${cg.get('desired_potential_loss_usd', 0):,.2f}** if Stop-Loss hits, "
                     f"which exceeds your **1% account risk limit (${pos['max_risk_dollars']:,.2f})**. "
-                    f"Recommended safe capital: **${cg.get('optimal_safe_capital_usd', 0):,.2f}** (`{cg.get('safe_cap_shares', 0)}` shares)."
+                    f"Recommended safe capital: **${cg.get('optimal_safe_capital_usd', 0):,.2f}** (`{cg.get('safe_cap_shares', 0)}` units)."
                 )
             else:
                 st.success(
@@ -140,7 +154,7 @@ with tab1:
             p1.metric(
                 "Target Profit (Take-Profit)",
                 f"+${pf.get('expected_gross_profit_usd', 0):,.2f}",
-                delta=f"+{pf.get('expected_profit_pct', 0)}% per share"
+                delta=f"+{pf.get('expected_profit_pct', 0)}% per unit"
             )
             p2.metric(
                 "Expected Value (EV)",
@@ -155,7 +169,7 @@ with tab1:
             p4.metric(
                 "Capped Max Loss (1% Rule)",
                 f"-${pf.get('expected_max_loss_usd', pos['max_risk_dollars']):,.2f}",
-                delta=f"{pos['recommended_shares']} shares",
+                delta=f"{pos['recommended_shares']} units",
                 delta_color="inverse"
             )
 
@@ -197,19 +211,22 @@ with tab1:
                 st.subheader("🧠 Chief Risk Officer (AI Report)")
                 st.markdown(res["ai_summary"])
 
-                with st.expander("📰 Recent Company News Scanned"):
+                with st.expander("📰 Recent News & Catalysts Scanned"):
                     for n in res["news"]:
                         st.write(n)
 
             with c_exec:
                 st.subheader("⚡ Paper Trading Execution")
+                st.write(f"**Market:** `{active_market}`")
                 st.write(f"**Paper Account Balance:** `${pos['account_balance']:,.2f}`")
                 st.write(f"**Optimal Safe Capital (1%):** `${cg.get('optimal_safe_capital_usd', 0):,.2f}`")
-                st.write(f"**Guarded Position Size:** `{pos['recommended_shares']}` shares (`${pf.get('expected_position_value_usd', 0):,.2f}`)")
+                st.write(f"**Guarded Position Size:** `{pos['recommended_shares']}` units (`${pf.get('expected_position_value_usd', 0):,.2f}`)")
                 st.write(f"**Max Dollar Risk (1% Rule):** `${pos['max_risk_dollars']:,.2f}`")
                 st.write(f"**Target Profit at TP (`${pos['take_profit_price']}`):** `+${pf.get('expected_gross_profit_usd', 0):,.2f}`")
 
-                if status == "APPROVED" and pos["recommended_shares"] > 0:
+                if not is_alpaca_direct:
+                    st.info("ℹ️ Direct Alpaca equity order execution is for stocks/ETFs. Futures/Forex (`=F`, `=X`) run full backtest, risk, profit forecast & 1% sizing analysis here.")
+                elif status == "APPROVED" and pos["recommended_shares"] > 0:
                     if exec_conf < 70.0:
                         st.caption(f"ℹ️ Confidence is {exec_conf}% (below your 70% reference mark — manual execution still available).")
                     if st.button("🟢 Send Protected Bracket Order to Alpaca", type="primary", use_container_width=True):
@@ -222,7 +239,7 @@ with tab1:
                         st.success("Execution Result:")
                         st.json(exec_res)
                 else:
-                    st.warning("🚫 Execution button locked: Ticker or strategies failed strict risk guardrails.")
+                    st.warning("🚫 Execution button locked: Asset or strategies failed strict risk guardrails.")
 
 with tab2:
     st.subheader("🗄️ Saved Risk Audits & Experiment Archive")
